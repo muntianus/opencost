@@ -1,0 +1,14 @@
+{
+  "name": "@perfops/opencost",
+  "version": "1.0.0",
+  "description": "PerfOps OpenCost Kubernetes & Docker Container Cost Allocation Service",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test tests/opencost.test.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
