@@ -18,6 +18,16 @@ function sendJson(res, statusCode, payload) {
   res.end(body);
 }
 
+/** Maps validation failures (invalid/oversized window) to an explicit 400 response. */
+function sendError(res, err) {
+  const statusCode = Number.isInteger(err?.statusCode) ? err.statusCode : 400;
+  const payload = { error: err?.message || 'Bad request' };
+  if (err?.code) {
+    payload.code = err.code;
+  }
+  sendJson(res, statusCode, payload);
+}
+
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let raw = '';
@@ -70,29 +80,37 @@ export function createOpenCostServer() {
     }
 
     if (req.method === 'GET' && pathname === '/allocation/compute') {
-      const windowParam = parsedUrl.searchParams.get('window') || '7d';
-      const aggregateParam = parsedUrl.searchParams.get('aggregate') || 'namespace';
-      const report = computeAllocationReport({
-        window: windowParam,
-        aggregate: aggregateParam,
-      });
-      sendJson(res, 200, report);
+      try {
+        const windowParam = parsedUrl.searchParams.get('window') || '7d';
+        const aggregateParam = parsedUrl.searchParams.get('aggregate') || 'namespace';
+        const report = computeAllocationReport({
+          window: windowParam,
+          aggregate: aggregateParam,
+        });
+        sendJson(res, 200, report);
+      } catch (err) {
+        sendError(res, err);
+      }
       return;
     }
 
     if (req.method === 'GET' && pathname === '/api/v1/estate-containers') {
-      const windowParam = parsedUrl.searchParams.get('window') || '30d';
-      const report = computeAllocationReport({
-        window: windowParam,
-        aggregate: 'container',
-      });
-      sendJson(res, 200, {
-        estate: 'perfops-globex-prod',
-        host: '72.62.71.140',
-        window: windowParam,
-        summary: report.summary,
-        containers: report.containers,
-      });
+      try {
+        const windowParam = parsedUrl.searchParams.get('window') || '30d';
+        const report = computeAllocationReport({
+          window: windowParam,
+          aggregate: 'container',
+        });
+        sendJson(res, 200, {
+          estate: 'perfops-globex-prod',
+          host: '72.62.71.140',
+          window: windowParam,
+          summary: report.summary,
+          containers: report.containers,
+        });
+      } catch (err) {
+        sendError(res, err);
+      }
       return;
     }
 
@@ -108,7 +126,7 @@ export function createOpenCostServer() {
         });
         sendJson(res, 200, report);
       } catch (err) {
-        sendJson(res, 400, { error: err.message });
+        sendError(res, err);
       }
       return;
     }

@@ -13,14 +13,131 @@ export const DEFAULT_RATES = {
   usdToRub: 96.5,
 };
 
-export const WINDOW_HOURS_MAP = {
+/**
+ * Billing window contract.
+ *
+ * `window` is expressed as `<number><unit>` with units `m` (minutes), `h` (hours),
+ * `d` (days) and `w` (weeks). Parsing is case-insensitive and trims surrounding
+ * whitespace. When the parameter is absent (or blank) the default `7d` (168h) is used.
+ * Numeric values passed programmatically are interpreted as hours.
+ *
+ * Windows longer than 31 days are rejected with HTTP 400 instead of being silently
+ * clamped: an unbounded window overstates spend and hides bad client input.
+ */
+export const DEFAULT_WINDOW = '7d';
+export const DEFAULT_WINDOW_HOURS = 168;
+export const MAX_WINDOW_HOURS = 31 * 24; // 31d = 744h
+
+/** Hours per supported unit. */
+export const WINDOW_UNIT_HOURS = Object.freeze({
+  m: 1 / 60,
+  h: 1,
+  d: 24,
+  w: 7 * 24,
+});
+
+/**
+ * Legacy alias table kept for API compatibility. Prefer `parseWindowHours`,
+ * which also understands arbitrary values such as `15m`, `2w` or `36h`.
+ */
+export const WINDOW_HOURS_MAP = Object.freeze({
   '1h': 1,
   '24h': 24,
   '1d': 24,
   '7d': 168,
-  '30d': 730,
-  month: 730,
-};
+  '30d': 720,
+  month: 730, // average Gregorian month, kept as a legacy alias
+});
+
+const WINDOW_PATTERN = /^(\d+(?:\.\d+)?)\s*(m|h|d|w)$/;
+
+/** Error raised for malformed or out-of-range windows; maps to HTTP 400. */
+export class WindowValidationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'WindowValidationError';
+    this.code = 'INVALID_WINDOW';
+    this.statusCode = 400;
+  }
+}
+
+function assertWindowRange(hours, rawInput) {
+  if (!Number.isFinite(hours) || hours <= 0) {
+    throw new WindowValidationError(
+      `Invalid window "${rawInput}": duration must be greater than zero.`
+    );
+  }
+  if (hours > MAX_WINDOW_HOURS) {
+    throw new WindowValidationError(
+      `Invalid window "${rawInput}": maximum allowed window is 31d (${MAX_WINDOW_HOURS}h).`
+    );
+  }
+  // Keep response numerics stable for minute-based windows (e.g. 1m = 0.016667h).
+  return Number(hours.toFixed(6));
+}
+
+function normalizeWindowHours(value) {
+  if (typeof value === 'string') {
+    return parseWindowHours(value);
+  }
+  return assertWindowRange(value, value);
+}
+
+/**
+ * Parses a billing window into hours.
+ *
+ * @param {string|number} [windowStr='7d'] Window such as `30m`, `1h`, `7d`, `1w`,
+ *   or a number of hours. `undefined`/`null`/blank strings select the `7d` default.
+ * @returns {number} Window duration in hours.
+ * @throws {WindowValidationError} On malformed values or windows longer than 31d.
+ */
+export function parseWindowHours(windowStr = DEFAULT_WINDOW) {
+  if (windowStr === undefined || windowStr === null) {
+    return DEFAULT_WINDOW_HOURS;
+  }
+  if (typeof windowStr === 'number') {
+    return normalizeWindowHours(windowStr);
+  }
+  if (typeof windowStr !== 'string') {
+    throw new WindowValidationError(
+      `Invalid window: expected a string or number, received ${typeof windowStr}.`
+    );
+  }
+
+  const key = windowStr.trim().toLowerCase();
+  if (key === '') {
+    return DEFAULT_WINDOW_HOURS;
+  }
+  if (Object.prototype.hasOwnProperty.call(WINDOW_HOURS_MAP, key)) {
+    return assertWindowRange(WINDOW_HOURS_MAP[key], windowStr);
+  }
+
+  const match = key.match(WINDOW_PATTERN);
+  if (!match) {
+    throw new WindowValidationError(
+      `Invalid window "${windowStr}". Expected <number><unit> with unit m, h, d or w (for example 30m, 24h, 7d, 1w).`
+    );
+  }
+
+  const amount = Number(match[1]);
+  const hours = amount * WINDOW_UNIT_HOURS[match[2]];
+  return assertWindowRange(hours, windowStr);
+}
+
+/**
+ * Parses a window into its normalized label and duration in hours.
+ *
+ * @param {string|number} [windowStr='7d']
+ * @returns {{ label: string, hours: number }}
+ */
+export function parseWindow(windowStr = DEFAULT_WINDOW) {
+  const hours = parseWindowHours(windowStr);
+  const label =
+    windowStr === undefined || windowStr === null || String(windowStr).trim() === ''
+      ? DEFAULT_WINDOW
+      : String(windowStr).trim().toLowerCase();
+  return { label, hours };
+}
 
 /**
  * Default PerfOps & Globex production container estate telemetry
@@ -119,30 +236,17 @@ export const ESTATE_CONTAINERS = [
   },
 ];
 
-export function parseWindowHours(windowStr = '7d') {
-  if (typeof windowStr === 'number' && windowStr > 0) {
-    return windowStr;
-  }
-  const key = String(windowStr).trim().toLowerCase();
-  if (WINDOW_HOURS_MAP[key]) {
-    return WINDOW_HOURS_MAP[key];
-  }
-  const match = key.match(/^(\d+)(h|d)$/);
-  if (match) {
-    const val = Number(match[1]);
-    return match[2] === 'd' ? val * 24 : val;
-  }
-  return 168; // default 7d
-}
-
 /**
  * Evaluates a single container's cost allocation, cgroup efficiency %, and health flags.
  */
 export function allocateSingleContainer(
   container,
-  windowHours = 168,
+  windowHours = DEFAULT_WINDOW_HOURS,
   rates = DEFAULT_RATES
 ) {
+  // Costs are always scaled by the actual requested window, never by a fixed 168h.
+  const effectiveWindowHours = normalizeWindowHours(windowHours);
+
   const cpuLimitCores = Number(container.cpuLimitCores || container.cpuRequestCores || 1);
   const cpuRequestCores = Number(container.cpuRequestCores || cpuLimitCores * 0.5);
   const cpuUsageAvgCores = Number(container.cpuUsageAvgCores ?? cpuRequestCores * 0.5);
@@ -159,17 +263,17 @@ export function allocateSingleContainer(
   const billableRamGb = Math.max(ramRequestMb, ramUsageAvgMb) / 1024;
   const limitRamGb = ramLimitMb / 1024;
 
-  const cpuCostUsd = Number((billableCpuCores * rates.cpuCoreHourUsd * windowHours).toFixed(4));
-  const ramCostUsd = Number((billableRamGb * rates.ramGbHourUsd * windowHours).toFixed(4));
-  const pvCostUsd = Number((pvStorageGb * rates.pvGbHourUsd * windowHours).toFixed(4));
-  const egressGbTotal = Number(((networkEgressGbPerDay / 24) * windowHours).toFixed(3));
+  const cpuCostUsd = Number((billableCpuCores * rates.cpuCoreHourUsd * effectiveWindowHours).toFixed(4));
+  const ramCostUsd = Number((billableRamGb * rates.ramGbHourUsd * effectiveWindowHours).toFixed(4));
+  const pvCostUsd = Number((pvStorageGb * rates.pvGbHourUsd * effectiveWindowHours).toFixed(4));
+  const egressGbTotal = Number(((networkEgressGbPerDay / 24) * effectiveWindowHours).toFixed(3));
   const networkCostUsd = Number((egressGbTotal * rates.egressGbUsd).toFixed(4));
 
   const totalCostUsd = Number(
     (cpuCostUsd + ramCostUsd + pvCostUsd + networkCostUsd).toFixed(4)
   );
   const monthlyProjectedUsd = Number(
-    ((totalCostUsd / windowHours) * 730).toFixed(2)
+    ((totalCostUsd / effectiveWindowHours) * 730).toFixed(2)
   );
   const monthlyProjectedRub = Number(
     (monthlyProjectedUsd * (rates.usdToRub || DEFAULT_RATES.usdToRub)).toFixed(2)
@@ -199,7 +303,7 @@ export function allocateSingleContainer(
     name: container.name,
     namespace: container.namespace || 'default',
     node: container.node || 'vps-72-62-71-140',
-    windowHours,
+    windowHours: effectiveWindowHours,
     cgroups: {
       cpuRequestCores,
       cpuLimitCores,
@@ -237,8 +341,7 @@ export function computeAllocationReport(options = {}) {
   const containers = Array.isArray(options.containers) && options.containers.length > 0
     ? options.containers
     : ESTATE_CONTAINERS;
-  const windowStr = options.window || '7d';
-  const windowHours = parseWindowHours(windowStr);
+  const { label: windowLabel, hours: windowHours } = parseWindow(options.window);
   const aggregateBy = options.aggregate || 'namespace';
   const rates = { ...DEFAULT_RATES, ...(options.rates || {}) };
 
@@ -266,7 +369,7 @@ export function computeAllocationReport(options = {}) {
         },
         window: {
           durationHours: windowHours,
-          label: String(windowStr),
+          label: windowLabel,
         },
         cpuCores: 0,
         cpuCost: 0,
@@ -325,7 +428,7 @@ export function computeAllocationReport(options = {}) {
   return {
     code: 200,
     status: 'success',
-    window: String(windowStr),
+    window: windowLabel,
     windowHours,
     aggregate: aggregateBy,
     integrations: {

@@ -4,8 +4,14 @@
 
 export {
   DEFAULT_RATES,
+  DEFAULT_WINDOW,
+  DEFAULT_WINDOW_HOURS,
+  MAX_WINDOW_HOURS,
   WINDOW_HOURS_MAP,
+  WINDOW_UNIT_HOURS,
+  WindowValidationError,
   ESTATE_CONTAINERS,
+  parseWindow,
   parseWindowHours,
   allocateSingleContainer,
   computeAllocationReport,
