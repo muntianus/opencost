@@ -19,6 +19,25 @@ Real-time container CPU, RAM (`cgroup` limits vs actual usage), PV storage, and 
 | `POST` | `/api/v1/allocate` | Computes cost allocation and cgroup efficiency for custom container telemetry |
 | `GET` | `/api/v1/estate-containers` | Returns full allocation and cgroup health report for the PerfOps/Globex container estate |
 
+### `window` parameter
+
+`window` accepts `<number><unit>`, where the unit is `m` (minutes), `h` (hours), `d` (days) or `w` (weeks). Parsing is case-insensitive and surrounding whitespace is ignored:
+
+| Example | Duration |
+| :--- | :--- |
+| `15m` | 0.25h |
+| `30m` | 0.5h |
+| `1h` / `24h` | 1h / 24h |
+| `7d` / `1w` | 168h |
+| `30d` | 720h |
+
+- **Default:** `7d` (168h) when `window` is omitted or blank (`/allocation/compute`, `POST /api/v1/allocate`). `/api/v1/estate-containers` keeps its own default of `30d`.
+- **Maximum:** `31d` (744h). Larger windows are rejected.
+- **Invalid values:** malformed input (for example `30`, `banana`, `0m`) or a window above the limit returns **HTTP 400** with `{"code":"INVALID_WINDOW","error":"..."}`. There is no silent fallback to 168h.
+- Programmatic callers may pass a number, which is interpreted as hours.
+
+All cost components are multiplied by the parsed window duration, so `window=30m` bills 0.5 hours instead of 168 hours.
+
 ## Quick Start
 
 ```bash
