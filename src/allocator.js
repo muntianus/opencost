@@ -246,9 +246,10 @@ export function computeAllocationReport(options = {}) {
     allocateSingleContainer(c, windowHours, rates)
   );
 
+  // Aggregate each source container with its own allocation by index: names can repeat across namespaces.
   // Build OpenCost-compatible allocation map keyed by namespace or container
   const allocationSet = {};
-  for (const item of allocatedContainers) {
+  for (const [index, item] of allocatedContainers.entries()) {
     const key =
       aggregateBy === 'container' || aggregateBy === 'pod'
         ? item.name
@@ -288,7 +289,7 @@ export function computeAllocationReport(options = {}) {
     bucket.cpuCost = Number((bucket.cpuCost + item.costs.cpuCostUsd).toFixed(4));
     bucket.ramBytes += Math.round(item.cgroups.ramUsageAvgMb * 1024 * 1024);
     bucket.ramCost = Number((bucket.ramCost + item.costs.ramCostUsd).toFixed(4));
-    bucket.pvBytes += Math.round((containers.find((c) => c.name === item.name)?.pvStorageGb || 0) * 1024 ** 3);
+    bucket.pvBytes += Math.round((containers[index].pvStorageGb || 0) * 1024 ** 3);
     bucket.pvCost = Number((bucket.pvCost + item.costs.pvCostUsd).toFixed(4));
     bucket.networkCost = Number((bucket.networkCost + item.costs.networkCostUsd).toFixed(4));
     bucket.totalCost = Number((bucket.totalCost + item.costs.totalCostUsd).toFixed(4));

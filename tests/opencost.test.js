@@ -109,3 +109,19 @@ test('HTTP server responds to /health, /allocation/compute, /api/v1/estate-conta
     await new Promise((resolve) => server.close(resolve));
   }
 });
+
+
+test('allocation preserves storage totals when container names repeat in different namespaces', () => {
+  const report = computeAllocationReport({
+    window: '24h',
+    aggregate: 'namespace',
+    containers: [
+      { name: 'worker', namespace: 'blue', pvStorageGb: 2, cpuRequestCores: 1, ramRequestMb: 512 },
+      { name: 'worker', namespace: 'green', pvStorageGb: 7, cpuRequestCores: 1, ramRequestMb: 512 },
+    ],
+  });
+
+  assert.equal(report.data[0].blue.pvBytes, 2 * 1024 ** 3);
+  assert.equal(report.data[0].green.pvBytes, 7 * 1024 ** 3);
+  assert.equal(report.summary.containerCount, 2);
+});
