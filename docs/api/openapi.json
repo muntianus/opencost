@@ -1,0 +1,477 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "PerfOps OpenCost",
+    "version": "1.0.0",
+    "description": "Container CPU/RAM/PV/egress cost allocation, efficiency scoring and OOM-risk detection for the PerfOps & Globex estate."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:4051",
+      "description": "Local / VPS loopback"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Liveness probe (no dependencies)",
+        "tags": [
+          "ops"
+        ],
+        "responses": {
+          "200": {
+            "description": "Service is up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/allocation/compute": {
+      "get": {
+        "operationId": "computeAllocation",
+        "summary": "Allocate estate costs over a window, OpenCost-style",
+        "tags": [
+          "allocation"
+        ],
+        "parameters": [
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "description": "Billing window `<number><unit>` (m, h, d, w); max 31d.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\s*\\d+(\\.\\d+)?\\s*[mhdwMHDW]\\s*$"
+            }
+          },
+          {
+            "name": "aggregate",
+            "in": "query",
+            "required": false,
+            "description": "`container` or `pod` return one bucket per container; any other value groups by namespace.",
+            "schema": {
+              "type": "string",
+              "default": "namespace",
+              "examples": [
+                "namespace",
+                "container",
+                "pod"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Allocation report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AllocationReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/api/v1/estate-containers": {
+      "get": {
+        "operationId": "listEstateContainers",
+        "summary": "Per-container costs for the built-in production estate",
+        "tags": [
+          "allocation"
+        ],
+        "parameters": [
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "description": "Billing window `<number><unit>` (m, h, d, w); max 31d.",
+            "schema": {
+              "type": "string",
+              "pattern": "^\\s*\\d+(\\.\\d+)?\\s*[mhdwMHDW]\\s*$",
+              "default": "30d"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Estate container costs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "estate",
+                    "host",
+                    "window",
+                    "summary",
+                    "containers"
+                  ],
+                  "properties": {
+                    "estate": {
+                      "type": "string"
+                    },
+                    "host": {
+                      "type": "string"
+                    },
+                    "window": {
+                      "type": "string"
+                    },
+                    "summary": {
+                      "$ref": "#/components/schemas/AllocationSummary"
+                    },
+                    "containers": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ContainerAllocation"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/api/v1/allocate": {
+      "post": {
+        "operationId": "allocateContainers",
+        "summary": "Allocate costs for caller-supplied containers",
+        "tags": [
+          "allocation"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/AllocateRequest"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/ContainerSpec"
+                    }
+                  }
+                ]
+              },
+              "example": {
+                "window": "24h",
+                "aggregate": "namespace",
+                "containers": [
+                  {
+                    "name": "api",
+                    "namespace": "prod",
+                    "cpuRequestCores": 1,
+                    "cpuLimitCores": 2,
+                    "cpuUsageAvgCores": 0.4,
+                    "ramRequestMb": 512,
+                    "ramLimitMb": 1024,
+                    "ramUsageAvgMb": 300,
+                    "pvStorageGb": 10,
+                    "networkEgressGbPerDay": 1
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Allocation report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AllocationReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "responses": {
+      "BadRequest": {
+        "description": "Invalid window, oversized window or malformed JSON body",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "examples": [
+              "INVALID_WINDOW"
+            ]
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "required": [
+          "status",
+          "service",
+          "version"
+        ],
+        "properties": {
+          "status": {
+            "const": "ok"
+          },
+          "service": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "estateContainers": {
+            "type": "integer"
+          },
+          "integrations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ContainerSpec": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "node": {
+            "type": "string"
+          },
+          "cpuRequestCores": {
+            "type": "number"
+          },
+          "cpuLimitCores": {
+            "type": "number"
+          },
+          "cpuUsageAvgCores": {
+            "type": "number"
+          },
+          "ramRequestMb": {
+            "type": "number"
+          },
+          "ramLimitMb": {
+            "type": "number"
+          },
+          "ramUsageAvgMb": {
+            "type": "number"
+          },
+          "pvStorageGb": {
+            "type": "number"
+          },
+          "networkEgressGbPerDay": {
+            "type": "number"
+          }
+        }
+      },
+      "Rates": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "cpuCoreHourUsd": {
+            "type": "number"
+          },
+          "ramGbHourUsd": {
+            "type": "number"
+          },
+          "pvGbHourUsd": {
+            "type": "number"
+          },
+          "egressGbUsd": {
+            "type": "number"
+          },
+          "usdToRub": {
+            "type": "number"
+          }
+        }
+      },
+      "AllocateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "containers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContainerSpec"
+            }
+          },
+          "window": {
+            "type": "string",
+            "default": "7d"
+          },
+          "aggregate": {
+            "type": "string",
+            "default": "namespace"
+          },
+          "rates": {
+            "$ref": "#/components/schemas/Rates"
+          }
+        }
+      },
+      "AllocationSummary": {
+        "type": "object",
+        "properties": {
+          "containerCount": {
+            "type": "integer"
+          },
+          "totalWindowUsd": {
+            "type": "number"
+          },
+          "totalMonthlyProjectedUsd": {
+            "type": "number"
+          },
+          "totalMonthlyProjectedRub": {
+            "type": "number"
+          },
+          "avgEfficiencyPct": {
+            "type": "number"
+          },
+          "oomRiskContainers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "overProvisionedContainers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ContainerAllocation": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "node": {
+            "type": "string"
+          },
+          "windowHours": {
+            "type": "number"
+          },
+          "cgroups": {
+            "type": "object"
+          },
+          "efficiencyScorePct": {
+            "type": "number"
+          },
+          "flags": {
+            "type": "object"
+          },
+          "recommendation": {
+            "type": "string"
+          },
+          "costs": {
+            "type": "object"
+          }
+        }
+      },
+      "AllocationReport": {
+        "type": "object",
+        "required": [
+          "code",
+          "status",
+          "window",
+          "windowHours",
+          "aggregate",
+          "summary",
+          "data",
+          "containers"
+        ],
+        "properties": {
+          "code": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          },
+          "window": {
+            "type": "string"
+          },
+          "windowHours": {
+            "type": "number"
+          },
+          "aggregate": {
+            "type": "string"
+          },
+          "integrations": {
+            "type": "object"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/AllocationSummary"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "containers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContainerAllocation"
+            }
+          }
+        }
+      }
+    }
+  }
+}
