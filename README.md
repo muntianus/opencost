@@ -42,11 +42,22 @@ All cost components are multiplied by the parsed window duration, so `window=30m
 
 ```bash
 # Run tests
-node --test tests/opencost.test.js
+npm test
 
 # Start HTTP microservice on port 4051
 npm start
 ```
+
+## API contract, CI & deploy
+
+- **Contract:** [`docs/api/openapi.json`](docs/api/openapi.json) (OpenAPI 3.1).
+  `tests/openapi-contract.test.js` fails when `ROUTES` in `src/server.js` and the spec disagree.
+- **Tests:** `npm test` — Node's built-in runner, no dependencies. CI runs it plus the
+  org security gate (gitleaks) on every pull request.
+- **Config:** every environment variable is listed in [`.env.example`](.env.example).
+- **Deploy:** `docker build -t opencost . && docker run -p 4051:4051 opencost` — `node:22-alpine`,
+  non-root, `HEALTHCHECK` on `GET /health`. The portfolio port map lives in
+  [`muntianus/architecture`](https://github.com/muntianus/architecture).
 
 ## Contact / Support
 
